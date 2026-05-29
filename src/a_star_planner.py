@@ -1,104 +1,84 @@
 import heapq
 import math
 import os
-import joblib  # Per caricare il modello di Machine Learning salvato
+import joblib  
 import pandas as pd
 from pgmpy.inference import VariableElimination
 from bayesian_network import modello_bayes
 
-# Nota: Assicurati che il file della rete bayesiana sia importabile o caricalo dinamicamente
-# Se necessario, puoi importare il modello direttamente dal tuo script precedente:
-# from bayesian_network import modello_bayes
-
 # =========================================================
-# CONFIGURAZIONE FATTORI DI SCALA PER L'EURISTICA h(n)
+# CONFIGURAZIONE FATTORI DI SCALA (Per normalizzare h(n))
 # =========================================================
-# Servono ancora all'euristica per guidare l'A* verso una direzione sensata
 SCALE_BMI = 5.0
 SCALE_CAFFEINE = 100.0
 SCALE_STEPS = 5000.0
 SCALE_SLEEP = 3.0
-
-# Valori ideali puramente indicativi usati solo dal calcolo della distanza h(n)
-IDEAL_BMI = 22.0
-IDEAL_CAFFEINE = 0.0
-IDEAL_STEPS = 10000.0
-IDEAL_SLEEP = 8.0
+SCALE_CAF_BED = 50.0      # Scala caffeina pre-sonno
+SCALE_ALC_BED = 3.0       # Scala alcol pre-sonno
+SCALE_SCREEN = 120.0      # Scala screen time
+SCALE_TEMP = 5.0          # Scala temperatura stanza
 
 # =========================================================
-# 1. FUNZIONE OBIETTIVO MACCHINE LEARNING (CLASSIFICATORE)
+# 1. FUNZIONE OBIETTIVO MACHINE LEARNING (CLASSIFICATORE)
 # =========================================================
 def is_healthy_ml(state, ml_model, threshold=0.85):
-    """
-    Interroga un modello di ML (es. Random Forest, XGBoost) passato come input.
-    Sulla base delle feature numeriche dello stato attuale, verifica se la 
-    probabilità della classe 'Healthy' supera la soglia impostata.
-    """
-    bmi, caffeine, steps, sleep = state
+    """Interroga il modello ML inviando tutte le 8 feature correnti."""
+    bmi, caffeine, steps, sleep, caf_bed, alc_bed, screen, temp = state
     
-    # Creiamo il vettore di feature con lo stesso ordine usato nel training del modello
-    # NOTA: adatta i nomi delle colonne a quelli esatti del tuo modello ML
+    # Costruiamo il DataFrame con i nomi esatti delle colonne del dataset
     features = pd.DataFrame([{
         'bmi': bmi,
         'caffeine': caffeine,
         'steps': steps,
-        'sleep': sleep
+        'sleep': sleep,
+        'caffeine_mg_before_bed': caf_bed,
+        'alcohol_units_before_bed': alc_bed,
+        'screen_time_before_bed_mins': screen,
+        'room_temperature_celsius': temp
     }])
     
     try:
-        # Estraiamo la probabilità della classe 'Healthy' (assumendo sia ad indice 0 o mappata)
-        # Se il modello restituisce un array di probabilità [P(Not_Healthy), P(Healthy)]
         probabilities = ml_model.predict_proba(features)[0]
-        
-        # Supponiamo che il tuo modello sia binario o che tu sappia l'indice della classe 'Healthy'
-        # Per esempio, se le classi sono ['Healthy', 'Insomnia', 'Sleep Apnea']
         class_index = list(ml_model.classes_).index('Healthy')
-        prob_healthy = probabilities[class_index]
-        
-        return prob_healthy >= threshold
+        return probabilities[class_index] >= threshold
     except Exception as e:
-        # Fallback di sicurezza in caso di modello mockato o non caricato
-        return bmi <= 25.0 and caffeine <= 30 and steps >= 8000 and sleep >= 7.0
+        # Fallback se il modello non è caricato
+        return bmi <= 25.0 and caf_bed == 0 and alc_bed == 0 and screen <= 30 and 18.0 <= temp <= 20.0
 
 
 # =========================================================
 # 2. FUNZIONE OBIETTIVO RETE BAYESIANA (BBN)
 # =========================================================
 def is_healthy_bbn(state, inferenza_bbn, threshold=0.80):
-    """
-    Interroga il motore d'inferenza della Rete Bayesiana.
-    Poiché la BBN accetta variabili discrete (stringhe), questa funzione 
-    mappa lo stato numerico dell'A* nelle categorie logiche della rete.
-    """
-    bmi, caffeine, steps, sleep = state
+    """Mappa le 8 feature quantitative nei nodi discreti della BBN."""
+    bmi, caffeine, steps, sleep, caf_bed, alc_bed, screen, temp = state
     
-    # --- DISCRETIZZAZIONE DELLO STATO CORRENTE PER LA BBN ---
-    # Mappiamo la Caffeina in 'tossicita_presonno'
-    if caffeine > 100:
+    # 1. Mappatura TOSSICITÀ PRE-SONNO (Caffeina tot, Caffeina pre-sonno e Alcol)
+    if caf_bed > 40 or alc_bed > 2 or caffeine > 200:
         tossicita = 'critica'
-    elif caffeine > 40:
+    elif caf_bed > 0 or alc_bed > 0 or caffeine > 100:
         tossicita = 'alta'
     else:
         tossicita = 'bassa'
         
-    # Mappiamo Passi e Sonno in 'stress_fisiologico' (Logica di Dominio)
-    if steps < 4000 or sleep < 5.5:
+    # 2. Mappatura STRESS FISIOLOGICO (Passi e Temperatura della stanza)
+    # Una stanza troppo calda (>23°C) o troppo fredda (<16°C) aumenta lo stress termico
+    if steps < 4000 or temp > 23.0 or temp < 16.0:
         stress = 'critico'
-    elif steps < 7000 or sleep < 6.5:
+    elif steps < 7000 or temp > 21.0 or temp < 17.5:
         stress = 'medio'
     else:
         stress = 'normale'
         
-    # Mappiamo il Sonno residuo in 'misallineamento_circadiano'
-    if sleep < 5.0:
+    # 3. Mappatura MISALLINEAMENTO CIRCADIANO (Ore di sonno ed Esposizione agli schermi)
+    if sleep < 5.0 or screen > 90:
         misallineamento = 'severo'
-    elif sleep < 6.5:
+    elif sleep < 6.5 or screen > 30:
         misallineamento = 'moderato'
     else:
         misallineamento = 'assente'
         
     try:
-        # Eseguiamo la query probabilistica sulla BBN impostando lo stato come evidenza
         query_result = inferenza_bbn.query(
             variables=['sleep_disorder_risk'],
             evidence={
@@ -108,66 +88,89 @@ def is_healthy_bbn(state, inferenza_bbn, threshold=0.80):
             },
             show_progress=False
         )
-        
-        # Estraiamo il valore associato alla categoria 'Healthy'
         prob_healthy = query_result.values[query_result.get_value(sleep_disorder_risk='Healthy')]
         return prob_healthy >= threshold
-        
     except Exception as e:
-        # Fallback di sicurezza
-        return bmi <= 25.0 and caffeine <= 30 and steps >= 8000 and sleep >= 7.0
+        return bmi <= 25.0 and steps >= 8000 and sleep >= 7.0 and caf_bed == 0
 
 
 # =========================================================
-# EURISTICA: CALCOLO DISTANZA EUCLIDEA PESATA
+# EURISTICA: DISTANZA DALLO STATO IDEAL-SALUTARE
 # =========================================================
 def heuristic(state):
-    """Calcola h(n): Distanza stimata verso lo stato ideale."""
-    bmi, caffeine, steps, sleep = state
+    """Calcola h(n) includendo i vincoli delle nuove variabili di igiene del sonno."""
+    bmi, caffeine, steps, sleep, caf_bed, alc_bed, screen, temp = state
     
+    # Calcolo dei delta verso i target ottimali
     d_bmi = max(0.0, bmi - 24.9) / SCALE_BMI
     d_caffeine = max(0.0, caffeine - 30) / SCALE_CAFFEINE
     d_steps = max(0.0, 8000 - steps) / SCALE_STEPS
     d_sleep = max(0.0, 7.0 - sleep) / SCALE_SLEEP
     
-    return math.sqrt(d_bmi**2 + d_caffeine**2 + d_steps**2 + d_sleep**2)
+    # Nuovi target: Caffeina sera = 0, Alcol sera = 0, Screen Time <= 30 min, Temp ideale = 18.5°C
+    d_caf_bed = max(0.0, caf_bed - 0) / SCALE_CAF_BED
+    d_alc_bed = max(0.0, alc_bed - 0) / SCALE_ALC_BED
+    d_screen = max(0.0, screen - 30) / SCALE_SCREEN
+    d_temp = abs(temp - 18.5) / SCALE_TEMP  # Distanza assoluta (penalizza sia troppo caldo che troppo freddo)
+    
+    return math.sqrt(d_bmi**2 + d_caffeine**2 + d_steps**2 + d_sleep**2 + 
+                     d_caf_bed**2 + d_alc_bed**2 + d_screen**2 + d_temp**2)
 
 
 # =========================================================
-# AZIONI DISPONIBILI (BUG DEL SONNO RISOLTO)
+# LE AZIONI TERAPEUTICHE (SPAZIO DEGLI STATI A 8 DIMENSIONI)
 # =========================================================
 ACTIONS = [
     {
         "desc": "Aumenta l'attività fisica (+1000 passi)",
-        "effect": lambda b, c, st, sl: (round(b - 0.1, 2), c, min(st + 1000, 15000), sl),
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (round(b - 0.1, 2), c, min(st + 1000, 15000), sl, cb, ab, scr, t),
         "cost": 10
     },
     {
-        "desc": "Riduci il consumo di caffeina (-20mg)",
-        "effect": lambda b, c, st, sl: (b, max(0, c - 20), st, sl),
+        "desc": "Riduci il consumo di caffeina giornaliero (-20mg)",
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, max(0, c - 20), st, sl, cb, ab, scr, t),
         "cost": 15
     },
     {
         "desc": "Migliora l'igiene del sonno (+30 min di riposo)",
-        "effect": lambda b, c, st, sl: (b, c, st, round(min(sl + 0.5, 10.0), 2)),
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, c, st, round(min(sl + 0.5, 10.0), 2), cb, ab, scr, t),
         "cost": 5
     },
     {
         "desc": "Ottimizzazione dieta rigida (Perdita peso mirata -0.5 BMI)",
-        "effect": lambda b, c, st, sl: (round(max(18.5, b - 0.5), 2), c, st, sl), # <--- BUG RISOLTO: sl al posto di b
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (round(max(18.5, b - 0.5), 2), c, st, sl, cb, ab, scr, t),
         "cost": 25
+    },
+    # --- NUOVE AZIONI DI IGIENE DEL SONNO ---
+    {
+        "desc": "Elimina caffè/te pomeridiano o serale (-20mg pre-sonno)",
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, c, st, sl, max(0, cb - 20), ab, scr, t),
+        "cost": 12
+    },
+    {
+        "desc": "Riduci il consumo di alcol a cena (-1 unità)",
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, c, st, sl, cb, max(0, ab - 1), scr, t),
+        "cost": 18  # Costo alto dovuto alle abitudini sociali
+    },
+    {
+        "desc": "Spegni i dispositivi elettronici prima di dormire (-30 min screen time)",
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, c, st, sl, cb, ab, max(0, scr - 30), t),
+        "cost": 8
+    },
+    {
+        "desc": "Regola il termostato della camera (Ottimizza verso i 18.5°C)",
+        "effect": lambda b, c, st, sl, cb, ab, scr, t: (
+            b, c, st, sl, cb, ab, scr, 
+            round(t - 1.0 if t > 18.5 else t + 1.0, 1) if abs(t - 18.5) > 0.5 else 18.5
+        ),
+        "cost": 4   # Costo bassissimo, basta un click sul termostato
     }
 ]
 
-
 # =========================================================
-# ENGINE ALGORITMO A* INTERATTIVO
+# ENGINE ALGORITMO A*
 # =========================================================
 def plan_therapeutic_path(start_state, healthy_check_func, model_object):
-    """
-    Esegue la ricerca A* accettando dinamicamente la funzione di controllo 
-    e l'oggetto modello associato (Rete Bayesiana o Modello ML).
-    """
     counter = 0
     open_set = []
     
@@ -176,12 +179,13 @@ def plan_therapeutic_path(start_state, healthy_check_func, model_object):
     
     best_g_scores = {start_state: 0}
     
-    print(f"Stato Iniziale: BMI={start_state[0]}, Caffeina={start_state[1]}mg, Passi={start_state[2]}, Sonno={start_state[3]}h")
+    print("Stato Iniziale Paziente:")
+    print(f" -> BMI: {start_state[0]} | Caffè Giornaliero: {start_state[1]}mg | Passi: {start_state[2]} | Sonno: {start_state[3]}h")
+    print(f" -> Caffè Pre-Sonno: {start_state[4]}mg | Alcol Sera: {start_state[5]} u | Screen Time: {start_state[6]}m | Temp Stanza: {start_state[7]}°C\n")
     
     while open_set:
         f, g, _, current_state, path = heapq.heappop(open_set)
         
-        # CHIAMATA DINAMICA ALLA FUNZIONE OBIETTIVO SCELTA
         if healthy_check_func(current_state, model_object):
             return path, current_state
         
@@ -189,8 +193,8 @@ def plan_therapeutic_path(start_state, healthy_check_func, model_object):
             continue
             
         for action in ACTIONS:
-            bmi, caffeine, steps, sleep = current_state
-            next_state = action["effect"](bmi, caffeine, steps, sleep)
+            b, c, st, sl, cb, ab, scr, t = current_state
+            next_state = action["effect"](b, c, st, sl, cb, ab, scr, t)
             next_g = g + action["cost"]
             
             if next_g < best_g_scores.get(next_state, float('inf')):
@@ -203,38 +207,30 @@ def plan_therapeutic_path(start_state, healthy_check_func, model_object):
                 
     return None, None
 
-
 # =========================================================
-# CORPO DI ESECUZIONE / SIMULAZIONE DI TEST
+# TEST BENCH
 # =========================================================
 if __name__ == "__main__":
     print("=" * 60)
-    print("   A* PLANNER INTEGRATO CON RETE BAYESIANA REALE ")
+    print("   A* CLINICAL PLANNER: MODELLO AD 8 VARIABILI ")
     print("=" * 60)
     
-    paziente_iniziale = (25.0, 20, 10000, 7.0)
+    # Configurazione di un paziente fortemente fuori range (Stato Critico)
+    # Ordine: (BMI, caffeine, steps, sleep, caf_bed, alc_bed, screen, temp)
+    paziente_critico = (23.5, 150, 13500, 5.0, 60, 2, 120, 23.5)
     
-    # 1. CREAZIONE DEL MOTORE DI INFERENZA CON LA TUA RETE REALE
-    # Qui prendiamo il modello_bayes importato dal tuo altro file
     inferenza_bbn_reale = VariableElimination(modello_bayes)
     
-    print("\n[ESECUZIONE]: Utilizzo della Rete Bayesiana per validare lo stato Healthy...")
-    
-    # 2. INIEZIONE DELLA DIPENDENZA
-    # Passiamo l'oggetto 'inferenza_bbn_reale' direttamente al planner
-    piano, stato_finale = plan_therapeutic_path(
-        start_state=paziente_iniziale, 
-        healthy_check_func=is_healthy_bbn,  
-        model_object=inferenza_bbn_reale    # <--- Il parametro 'inferenza_bbn' riceve questo!
-    )
+    print("[RUN]: Ricerca del percorso terapeutico ottimale tramite BBN...")
+    piano, stato_finale = plan_therapeutic_path(paziente_critico, is_healthy_bbn, inferenza_bbn_reale)
     
     if piano:
-        print("\n" + "=" * 60)
-        print(" PIANO TERAPEUTICO ADATTIVO GENERATO ")
         print("=" * 60)
-        for i, (azione, stato) in enumerate(piano, 1):
+        print(" PIANO DI IGIENE DEL SONNO E DELLO STILE DI VITA TROVATO ")
+        print("=" * 60)
+        for i, (azione, s) in enumerate(piano, 1):
             print(f"Step {i}: {azione}")
-            print(f"        -> Stato: BMI={stato[0]}, Caffeina={stato[1]}mg, Passi={stato[2]}, Sonno={stato[3]}h\n")
-        print(f"Stato Finale Validato dal Modello: {stato_finale}")
+            print(f"        -> Stato: BMI={s[0]}, Caffè={s[1]}mg, Passi={s[2]}, Sonno={s[3]}h, CaffèSera={s[4]}mg, Alcol={s[5]}u, Screen={s[6]}m, Temp={s[7]}°C\n")
+        print(f"Stato Finale Validato dalla Rete: {stato_finale}")
     else:
-        print("Nessun piano terapeutico trovato.")
+        print("Nessun piano terapeutico trovato in grado di soddisfare i requisiti minimi della BBN.")
