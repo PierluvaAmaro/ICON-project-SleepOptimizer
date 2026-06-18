@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 from pgmpy.models import DiscreteBayesianNetwork
-from pgmpy.estimators import MaximumLikelihoodEstimator
 from pgmpy.inference import VariableElimination
 import warnings
 
@@ -13,10 +12,8 @@ print(" AVVIO MOTORE PROBABILISTICO: RETE BAYESIANA (BBN) ")
 print("=" * 60)
 
 # =========================================================
-# 1. CARICAMENTO DATI
+# 1. CARICAMENTO DATI (Percorsi dinamici monostep)
 # =========================================================
-
-# Rendiamo il percorso dinamico andando due passi indietro rispetto alla posizione dello script
 script_dir = os.path.dirname(os.path.abspath(__file__))
 path_dataset = os.path.join(script_dir, '..', 'data', 'datasets', 'sleep_health_dataset.csv')
 path_enriched = os.path.join(script_dir, '..', 'data', 'datasets', 'sleep_health_enriched.csv')
@@ -34,7 +31,6 @@ df_totale = pd.merge(df_original, df_enriched, on='person_id')
 # =========================================================
 # 2. PREPARAZIONE DATI PER LA BBN
 # =========================================================
-
 dati_bbn = df_totale[
     [
         'misallineamento_circadiano',
@@ -44,29 +40,15 @@ dati_bbn = df_totale[
     ]
 ].copy()
 
-# Rimuoviamo eventuali NaN
-dati_bbn = dati_bbn.dropna()
-
-# Convertiamo tutto in stringhe/categorie discrete
-dati_bbn = dati_bbn.astype(str)
-
-print("\nTipi delle variabili:")
-print(dati_bbn.dtypes)
-
-print("\nValori nulli:")
-print(dati_bbn.isnull().sum())
-
-print("\nCategorie disponibili:")
-for colonna in dati_bbn.columns:
-    print(f"\n{colonna}:")
-    print(dati_bbn[colonna].unique())
+# Rimuoviamo eventuali NaN e convertiamo in stringhe discrete
+dati_bbn = dati_bbn.dropna().astype(str)
 
 print("\nStruttura dati preparata con successo.")
 
 # =========================================================
 # 3. DEFINIZIONE DELLA RETE BAYESIANA (DAG)
 # =========================================================
-
+# Usiamo la classe specifica richiesta dalla tua versione di pgmpy
 modello_bayes = DiscreteBayesianNetwork([
     ('misallineamento_circadiano', 'sleep_disorder_risk'),
     ('tossicita_presonno', 'stress_fisiologico'),
@@ -74,41 +56,28 @@ modello_bayes = DiscreteBayesianNetwork([
 ])
 
 # =========================================================
-# 4. TRAINING DEL MODELLO
+# 4. TRAINING DEL MODELLO AUTOMATICO
 # =========================================================
-
 print("\nCalcolo delle CPT (Conditional Probability Tables)...")
 
-modello_bayes.fit(
-    dati_bbn,
-    estimator=MaximumLikelihoodEstimator,
-    # prior_type="BDeu"
-)
+# Omettiamo 'estimator': pgmpy istanzierà l'estimatore discreto di default in autonomia
+modello_bayes.fit(dati_bbn)
 
 # Validazione struttura
 assert modello_bayes.check_model()
-
 print("Modello Bayesiano validato con successo!")
 
 # =========================================================
 # 5. MOTORE INFERENZIALE
 # =========================================================
-
 inferenza = VariableElimination(modello_bayes)
 
 # =========================================================
-# 6. INFERENZA PREDITTIVA
+# 6. INFERENZA PREDITTIVA (WHAT-IF ANALYSIS)
 # =========================================================
-
 print("\n" + "=" * 60)
 print(" INFERENZA PREDITTIVA (WHAT-IF ANALYSIS) ")
 print("=" * 60)
-
-# IMPORTANTE:
-# usa esattamente le categorie presenti nel dataset.
-# Qui assumiamo che esistano:
-# - 'critico'
-# - 'severo'
 
 q1 = inferenza.query(
     variables=['sleep_disorder_risk'],
@@ -118,42 +87,31 @@ q1 = inferenza.query(
     }
 )
 
-print("\nScenario 1:")
-print("Paziente con:")
-print("- Stress fisiologico = 'critico'")
-print("- Misallineamento circadiano = 'severo'")
-
-print("\nDistribuzione probabilistica del rischio:")
+print("\nScenario 1 (Paziente con Stress 'critico' e Misallineamento 'severo'):")
 print(q1)
 
 # =========================================================
-# 7. INFERENZA DIAGNOSTICA
+# 7. INFERENZA DIAGNOSTICA (RAGIONAMENTO ALL'INDIETRO)
 # =========================================================
-
 print("\n" + "=" * 60)
 print(" INFERENZA DIAGNOSTICA (RAGIONAMENTO ALL'INDIETRO) ")
 print("=" * 60)
 
-# ATTENZIONE:
-# usa la categoria esatta presente nel dataset
-# es: 'Severe'
-
 q2 = inferenza.query(
     variables=['tossicita_presonno'],
     evidence={
-        'sleep_disorder_risk': 'Severe'
+        'sleep_disorder_risk': 'Healthy'
     }
 )
 
-print("\nScenario 2:")
-print("Diagnosi osservata:")
-print("- sleep_disorder_risk = 'Severe'")
-
-print("\nProbabilità della tossicità pre-sonno:")
+print("\nScenario 2 (Diagnosi osservata: Rischio 'Healthy'):")
+print("Probabilità delle cause scatenanti (Tossicità Pre-Sonno):")
 print(q2)
 
-# =========================================================
-# 8. FINE
-# =========================================================
-
 print("\nElaborazione inferenziale completata.")
+
+# 1. Controlla quanti dati 'alta' ci sono in totale nel dataset (Il Prior)
+print(df_totale['tossicita_presonno'].value_counts(normalize=True))
+
+# 2. Controlla la distribuzione reale della tossicità SOLO tra i sani
+print(pd.crosstab(df_totale['tossicita_presonno'], df_totale['sleep_disorder_risk'], normalize='columns'))
