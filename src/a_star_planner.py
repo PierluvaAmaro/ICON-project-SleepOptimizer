@@ -62,7 +62,7 @@ def is_healthy_bbn(state, inferenza_bbn, threshold=0.80):
         tossicita = 'bassa'
         
     # 2. Mappatura STRESS FISIOLOGICO (Passi e Temperatura della stanza)
-    # Una stanza troppo calda (>23°C) o troppo fredda (<16°C) aumenta lo stress termico
+
     if steps < 4000 or temp > 23.0 or temp < 16.0:
         stress = 'critico'
     elif steps < 7000 or temp > 21.0 or temp < 17.5:
@@ -95,7 +95,7 @@ def is_healthy_bbn(state, inferenza_bbn, threshold=0.80):
 
 
 # =========================================================
-# EURISTICA: DISTANZA DALLO STATO IDEAL-SALUTARE
+# EURISTICA
 # =========================================================
 def heuristic(state):
     """Calcola h(n) includendo i vincoli delle nuove variabili di igiene del sonno."""
@@ -141,7 +141,7 @@ ACTIONS = [
         "effect": lambda b, c, st, sl, cb, ab, scr, t: (round(max(18.5, b - 0.5), 2), c, st, sl, cb, ab, scr, t),
         "cost": 25
     },
-    # --- NUOVE AZIONI DI IGIENE DEL SONNO ---
+    
     {
         "desc": "Elimina caffè/te pomeridiano o serale (-20mg pre-sonno)",
         "effect": lambda b, c, st, sl, cb, ab, scr, t: (b, c, st, sl, max(0, cb - 20), ab, scr, t),
@@ -168,7 +168,7 @@ ACTIONS = [
 ]
 
 # =========================================================
-# ENGINE ALGORITMO A*
+# ALGORITMO A*
 # =========================================================
 def plan_therapeutic_path(start_state, healthy_check_func, model_object):
     counter = 0

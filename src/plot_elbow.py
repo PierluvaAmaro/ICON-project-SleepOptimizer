@@ -14,7 +14,7 @@ print("="*60)
 print(" CALCOLO DEL METODO DEL GOMITO (ELBOW METHOD) ")
 print("="*60)
 
-# 1. CARICAMENTO E PREPROCESSING (Identico alla pipeline principale)
+# 1. CARICAMENTO E PREPROCESSING 
 df_original = pd.read_csv('../data/sleep_health_dataset.csv')
 df_enriched = pd.read_csv('../data/sleep_health_enriched.csv')
 df_original.columns = df_original.columns.str.lower().str.replace(' ', '_')
@@ -49,7 +49,7 @@ for k in k_values:
 plt.figure(figsize=(9, 5))
 plt.plot(k_values, wcss, marker='o', linestyle='--', color='#b22222', linewidth=2, markersize=8)
 
-# Evidenziamo il punto K=3 che abbiamo scelto
+# Evidenziamo il punto K=3 
 plt.axvline(x=3, color='#2e8b57', linestyle=':', label='K Ottimale Scelto (K=3)')
 
 plt.title('Metodo del Gomito (Elbow Method) per Selezione K', fontsize=14, fontweight='bold')
